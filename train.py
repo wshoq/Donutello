@@ -1,7 +1,7 @@
 import os
 import json
 import random
-from datasets import load_dataset, Features, Value, Image
+from datasets import load_dataset
 from transformers import DonutProcessor, VisionEncoderDecoderModel, Seq2SeqTrainer, Seq2SeqTrainingArguments
 import torch
 
@@ -29,20 +29,19 @@ if not os.path.exists(VAL_FILE):
         f.writelines(val)
     print(f"[INFO] Zapisano {len(train)} rekordów do {TRAIN_FILE} i {len(val)} do {VAL_FILE}")
 
-# --- Wczytanie datasetu ---
-features = Features({
-    "input": Value("string"),
-    "output": Value("string"),
-    "image": Image()
-})
-dataset = load_dataset("json", data_files={"train": TRAIN_FILE, "validation": VAL_FILE}, features=features)
+# --- Wczytanie datasetu (bez wymuszania features) ---
+dataset = load_dataset("json", data_files={"train": TRAIN_FILE, "validation": VAL_FILE})
 
 # --- Procesor Donut ---
 processor = DonutProcessor.from_pretrained(MODEL_NAME)
 model = VisionEncoderDecoderModel.from_pretrained(MODEL_NAME)
 
+# --- Preprocessing ---
 def preprocess_function(example):
-    pixel_values = processor(example["image"], return_tensors="pt").pixel_values.squeeze(0)
+    # Używamy image_path zamiast image
+    image_path = example["image_path"]
+    pixel_values = processor(image_path, return_tensors="pt").pixel_values.squeeze(0)
+
     labels = processor.tokenizer(
         example["output"],
         add_special_tokens=False,
@@ -51,9 +50,10 @@ def preprocess_function(example):
         max_length=processor.tokenizer.model_max_length,
         return_tensors="pt"
     )["input_ids"].squeeze(0)
+
     return {"pixel_values": pixel_values, "labels": labels}
 
-dataset = dataset.map(preprocess_function, remove_columns=["image", "input", "output"])
+dataset = dataset.map(preprocess_function, remove_columns=["image_path", "input", "output"])
 
 # --- Argumenty trenera ---
 training_args = Seq2SeqTrainingArguments(
