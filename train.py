@@ -1,53 +1,59 @@
 import os
 import json
-from datasets import load_dataset
-from transformers import DonutProcessor, VisionEncoderDecoderModel, Seq2SeqTrainer, Seq2SeqTrainingArguments
-from PIL import Image
-import torch
 import random
+from datasets import load_dataset, Features, Value, Image, DatasetDict
+from transformers import DonutProcessor, VisionEncoderDecoderModel, Seq2SeqTrainer, Seq2SeqTrainingArguments
+import torch
 
 # --- KONFIG ---
 MODEL_NAME = "naver-clova-ix/donut-base-finetuned-cord-v2"
-DATA_DIR = os.getenv("DATA_DIR", "data")
-TRAIN_FILE = os.path.join(DATA_DIR, "train.jsonl")
-VAL_FILE = os.path.join(DATA_DIR, "val.jsonl")
+TRAIN_FILE = os.getenv("TRAIN_FILE", "data/train.jsonl")
+VAL_FILE = os.getenv("VAL_FILE", "data/val.jsonl")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", 1))
 EPOCHS = int(os.getenv("EPOCHS", 3))
 LR = float(os.getenv("LEARNING_RATE", 5e-5))
+VAL_SPLIT = 0.2  # procent rekordów do walidacji, jeśli val.jsonl nie istnieje
 
-# --- Walidacja datasetu ---
+# --- Sprawdzenie datasetu ---
 if not os.path.exists(TRAIN_FILE):
-    raise FileNotFoundError(f"[ERROR] Nie znaleziono {TRAIN_FILE}")
+    raise FileNotFoundError(f"[ERROR] Nie znaleziono pliku treningowego {TRAIN_FILE}")
+
 if not os.path.exists(VAL_FILE):
-    print(f"[INFO] {VAL_FILE} nie znaleziono. Tworzę walidację 20% z {TRAIN_FILE}...")
+    print(f"[INFO] {VAL_FILE} nie znaleziono. Tworzę walidację {VAL_SPLIT*100}% z {TRAIN_FILE}...")
     with open(TRAIN_FILE, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-    random.shuffle(lines)
-    split_idx = int(len(lines) * 0.8)
-    train_lines = lines[:split_idx]
-    val_lines = lines[split_idx:]
-    os.makedirs(DATA_DIR, exist_ok=True)
+        data = [json.loads(l) for l in f.readlines()]
+    random.shuffle(data)
+    split_idx = int(len(data)*(1-VAL_SPLIT))
+    train_data = data[:split_idx]
+    val_data = data[split_idx:]
+    os.makedirs(os.path.dirname(TRAIN_FILE), exist_ok=True)
     with open(TRAIN_FILE, "w", encoding="utf-8") as f:
-        f.writelines(train_lines)
+        for item in train_data:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
     with open(VAL_FILE, "w", encoding="utf-8") as f:
-        f.writelines(val_lines)
-    print(f"[INFO] Zapisano {len(train_lines)} rekordów do {TRAIN_FILE} i {len(val_lines)} do {VAL_FILE}")
+        for item in val_data:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    print(f"[INFO] Zapisano {len(train_data)} rekordów do {TRAIN_FILE} i {len(val_data)} do {VAL_FILE}")
 
 # --- Wczytanie datasetu ---
-dataset = load_dataset("json", data_files={"train": TRAIN_FILE, "validation": VAL_FILE})
+features = Features({
+    "input": Value("string"),
+    "output": Value("string"),
+    "image": Value("string")  # ścieżka jako string
+})
+dataset = load_dataset("json", data_files={"train": TRAIN_FILE, "validation": VAL_FILE}, features=features)
 
 # --- Procesor Donut ---
 processor = DonutProcessor.from_pretrained(MODEL_NAME)
 model = VisionEncoderDecoderModel.from_pretrained(MODEL_NAME)
 
-# --- Preprocessing ---
+# --- Funkcja preprocess ---
 def preprocess_function(example):
-    image_path = example["image_path"]
+    image_path = os.path.join("data", example["image"])
     if not os.path.exists(image_path):
         raise FileNotFoundError(f"[ERROR] Nie znaleziono obrazu {image_path}")
-    image = Image.open(image_path).convert("RGB")
-    pixel_values = processor(image, return_tensors="pt").pixel_values.squeeze(0)
+    pixel_values = processor(image_path, return_tensors="pt").pixel_values.squeeze(0)
     labels = processor.tokenizer(
         example["output"],
         add_special_tokens=False,
@@ -58,7 +64,7 @@ def preprocess_function(example):
     )["input_ids"].squeeze(0)
     return {"pixel_values": pixel_values, "labels": labels}
 
-dataset = dataset.map(preprocess_function, remove_columns=["image_path", "input", "output"])
+dataset = dataset.map(preprocess_function, remove_columns=["image", "input", "output"])
 
 # --- Argumenty trenera ---
 training_args = Seq2SeqTrainingArguments(
@@ -92,6 +98,7 @@ trainer = Seq2SeqTrainer(
 )
 
 # --- Trening ---
+print("[INFO] Start treningu...")
 trainer.train()
 trainer.save_model(OUTPUT_DIR)
-print(f"Model zapisany w {OUTPUT_DIR}")
+print(f"[INFO] Model zapisany w {OUTPUT_DIR}")
