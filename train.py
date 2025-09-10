@@ -25,15 +25,15 @@ processor = DonutProcessor.from_pretrained(MODEL_NAME)
 model = VisionEncoderDecoderModel.from_pretrained(MODEL_NAME)
 
 def preprocess_function(example):
-    pixel_values = processor(example["image"], return_tensors="pt").pixel_values.squeeze()
+    pixel_values = processor(example["image"], return_tensors="pt").pixel_values.squeeze(0)
     labels = processor.tokenizer(
         example["output"],
         add_special_tokens=False,
         padding="max_length",
         truncation=True,
-        max_length=512,
+        max_length=processor.tokenizer.model_max_length,
         return_tensors="pt"
-    )["input_ids"].squeeze()
+    )["input_ids"].squeeze(0)
     return {"pixel_values": pixel_values, "labels": labels}
 
 dataset = dataset.map(preprocess_function, remove_columns=["image", "input", "output"])
@@ -52,7 +52,7 @@ training_args = Seq2SeqTrainingArguments(
     gradient_checkpointing=True,
     remove_unused_columns=False,
     save_total_limit=2,
-    fp16=True if torch.cuda.is_available() else False,
+    fp16=torch.cuda.is_available(),
     report_to="none"
 )
 
