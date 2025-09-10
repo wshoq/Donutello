@@ -1,7 +1,9 @@
 import os
+import json
 import random
-from datasets import load_dataset, Features, Value
+from datasets import load_dataset
 from transformers import DonutProcessor, VisionEncoderDecoderModel, Seq2SeqTrainer, Seq2SeqTrainingArguments
+from PIL import Image
 import torch
 
 # --- KONFIG ---
@@ -33,27 +35,20 @@ if not os.path.exists(VAL_FILE):
         f.writelines(val_lines)
     print(f"[INFO] Zapisano {len(train_lines)} rekordów do {TRAIN_FILE} i {len(val_lines)} do {VAL_FILE}")
 
-# --- Features datasetu ---
-features = Features({
-    "input": Value("string"),
-    "output": Value("string"),
-    "image": Value("string")  # ścieżka do pliku względem DATA_DIR/png
-})
-
 # --- Wczytanie datasetu ---
-dataset = load_dataset("json", data_files={"train": TRAIN_FILE, "validation": VAL_FILE}, features=features)
+dataset = load_dataset("json", data_files={"train": TRAIN_FILE, "validation": VAL_FILE})
 
-# --- Procesor Donut ---
+# --- Procesor i model Donut ---
 processor = DonutProcessor.from_pretrained(MODEL_NAME)
 model = VisionEncoderDecoderModel.from_pretrained(MODEL_NAME)
 
 # --- Preprocessing ---
 def preprocess_function(example):
-    # obsługa folderu png i wielu stron
-    image_path = os.path.join(DATA_DIR, "png", example["image"])
+    image_path = os.path.join(DATA_DIR, example["image_path"])
     if not os.path.exists(image_path):
         raise FileNotFoundError(f"[ERROR] Nie znaleziono obrazu {image_path}")
-    pixel_values = processor(image_path, return_tensors="pt").pixel_values.squeeze(0)
+    image = Image.open(image_path).convert("RGB")
+    pixel_values = processor(image, return_tensors="pt").pixel_values.squeeze(0)
     labels = processor.tokenizer(
         example["output"],
         add_special_tokens=False,
@@ -64,7 +59,7 @@ def preprocess_function(example):
     )["input_ids"].squeeze(0)
     return {"pixel_values": pixel_values, "labels": labels}
 
-dataset = dataset.map(preprocess_function, remove_columns=["image", "input", "output"])
+dataset = dataset.map(preprocess_function, remove_columns=["image_path", "input", "output"])
 
 # --- Argumenty trenera ---
 training_args = Seq2SeqTrainingArguments(
@@ -100,4 +95,4 @@ trainer = Seq2SeqTrainer(
 # --- Trening ---
 trainer.train()
 trainer.save_model(OUTPUT_DIR)
-print(f"[INFO] Model zapisany w {OUTPUT_DIR}")
+print(f"Model zapisany w {OUTPUT_DIR}")
