@@ -1,12 +1,11 @@
 import os
 import json
 import random
+from glob import glob
 from datasets import Dataset, DatasetDict
 from transformers import DonutProcessor, VisionEncoderDecoderModel, Seq2SeqTrainer, Seq2SeqTrainingArguments
 from PIL import Image
 import torch
-from glob import glob
-from torch.nn.utils.rnn import pad_sequence
 
 # --- KONFIG ---
 MODEL_NAME = "naver-clova-ix/donut-base-finetuned-cord-v2"
@@ -38,7 +37,7 @@ if not os.path.exists(VAL_FILE):
         f.writelines(val_lines)
     print(f"[INFO] Zapisano {len(train_lines)} rekordów do {TRAIN_FILE} i {len(val_lines)} do {VAL_FILE}")
 
-# --- Wczytanie datasetu ---
+# --- Wczytanie JSONL z obsługą wielu stron ---
 def load_jsonl(file_path):
     data = []
     with open(file_path, "r", encoding="utf-8") as f:
@@ -54,6 +53,7 @@ def load_jsonl(file_path):
 
 train_data = load_jsonl(TRAIN_FILE)
 val_data = load_jsonl(VAL_FILE)
+
 dataset = DatasetDict({
     "train": Dataset.from_list(train_data),
     "validation": Dataset.from_list(val_data)
@@ -63,51 +63,44 @@ dataset = DatasetDict({
 processor = DonutProcessor.from_pretrained(MODEL_NAME)
 model = VisionEncoderDecoderModel.from_pretrained(MODEL_NAME)
 
-# --- Preprocessing ---
-def preprocess_function(example):
-    images = []
-    for img_path in example["image_paths"]:
-        if not os.path.exists(img_path):
-            raise FileNotFoundError(f"[ERROR] Nie znaleziono obrazu {img_path}")
-        image = Image.open(img_path).convert("RGB")
-        images.append(processor(image, return_tensors="pt").pixel_values.squeeze(0))
-    example["pixel_values_list"] = images
-
-    text = example["output"]
-    if not isinstance(text, str):
-        text = json.dumps(text, ensure_ascii=False)
-
-    tokenized = processor.tokenizer(
-        text,
-        add_special_tokens=False,
-        padding="max_length",
-        truncation=True,
-        max_length=int(MAX_LENGTH),
-        return_tensors="pt"
-    )
-    example["labels"] = tokenized["input_ids"].squeeze(0)
-    return example
-
-dataset = dataset.map(
-    preprocess_function,
-    batched=False,
-    remove_columns=["image_path", "input", "output", "image_paths"]
-)
-
-# --- Custom collator dla zmiennej liczby stron ---
+# --- Lazy loading w collate_fn ---
 def collate_fn(batch):
-    max_pages = max(len(item["pixel_values_list"]) for item in batch)
     batch_images = []
+    labels = []
+
+    max_pages = max(len(item["image_paths"]) for item in batch)
+
     for item in batch:
-        pages = item["pixel_values_list"]
-        # pad strony do max_pages
-        if len(pages) < max_pages:
-            pad_tensor = torch.zeros_like(pages[0])
-            pages.extend([pad_tensor] * (max_pages - len(pages)))
-        batch_images.append(torch.stack(pages))  # [num_pages, 3, H, W]
-    pixel_values = torch.stack(batch_images)  # [B, num_pages, 3, H, W]
-    labels = torch.stack([item["labels"] for item in batch])
-    return {"pixel_values": pixel_values, "labels": labels}
+        images = []
+        for img_path in item["image_paths"]:
+            if not os.path.exists(img_path):
+                raise FileNotFoundError(f"[ERROR] Nie znaleziono obrazu {img_path}")
+            image = Image.open(img_path).convert("RGB")
+            images.append(processor(image, return_tensors="pt").pixel_values.squeeze(0))
+        # Pad strony do max_pages
+        if len(images) < max_pages:
+            pad_tensor = torch.zeros_like(images[0])
+            images.extend([pad_tensor] * (max_pages - len(images)))
+        batch_images.append(torch.stack(images))  # [num_pages, 3, H, W]
+
+        # Tokenizacja output
+        text = item["output"]
+        if not isinstance(text, str):
+            text = json.dumps(text, ensure_ascii=False)
+        tokenized = processor.tokenizer(
+            text,
+            add_special_tokens=False,
+            padding="max_length",
+            truncation=True,
+            max_length=MAX_LENGTH,
+            return_tensors="pt"
+        )
+        labels.append(tokenized["input_ids"].squeeze(0))
+
+    return {
+        "pixel_values": torch.stack(batch_images),
+        "labels": torch.stack(labels)
+    }
 
 # --- Argumenty trenera ---
 training_args = Seq2SeqTrainingArguments(
