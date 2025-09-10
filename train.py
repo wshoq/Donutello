@@ -15,6 +15,7 @@ OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", 1))
 EPOCHS = int(os.getenv("EPOCHS", 3))
 LR = float(os.getenv("LEARNING_RATE", 5e-5))
+MAX_LENGTH = 512  # <-- ograniczamy długość tokenów
 
 # --- Walidacja datasetu ---
 if not os.path.exists(TRAIN_FILE):
@@ -54,7 +55,7 @@ def preprocess_function(example):
         add_special_tokens=False,
         padding="max_length",
         truncation=True,
-        max_length=processor.tokenizer.model_max_length,
+        max_length=MAX_LENGTH,  # <-- używamy ograniczonej długości
         return_tensors="pt"
     )["input_ids"].squeeze(0)
     return {"pixel_values": pixel_values, "labels": labels}
