@@ -1,47 +1,35 @@
-# --- Bazowy obraz: PyTorch z CUDA 12.8 i cuDNN9 ---
+# --- Base: PyTorch z CUDA 12.8 + cuDNN9 (torch już jest) ---
 FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
-# --- ENV ---
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=Europe/Warsaw
-WORKDIR /workspace
-
-# --- Systemowe zależności ---
+# --- Systemowe pakiety ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git wget curl unzip ca-certificates build-essential \
     libgl1 libglib2.0-0 ffmpeg libsndfile1 \
-    openssh-server procps python3-dev python3-distutils \
-    && rm -rf /var/lib/apt/lists/*
+    python3-dev python3-distutils \
+ && rm -rf /var/lib/apt/lists/*
 
-# --- pip upgrade ---
+# --- Upgrade pip ---
 RUN python3 -m pip install --upgrade pip setuptools wheel
 
-# --- Pythonowe paczki (bez torch – jest w base image!) ---
+# --- Hugging Face i inne ---
 RUN pip install --no-cache-dir \
-    "transformers>=4.34.0" \
-    datasets \
-    accelerate \
+    transformers==4.55.4 \
+    datasets==3.0.1 \
+    accelerate==0.34.2 \
     peft \
     sentencepiece \
     Pillow \
     tqdm \
     evaluate \
     jsonlines \
+    scikit-learn \
+    nltk \
     opencv-python-headless
 
-# --- Git LFS (modele na HF) ---
+# --- Git LFS ---
 RUN apt-get update && apt-get install -y git-lfs && git lfs install && rm -rf /var/lib/apt/lists/*
 
-# --- User (opcjonalnie) ---
-ARG USERNAME=runner
-ARG USER_UID=1000
-ARG USER_GID=1000
-RUN groupadd --gid ${USER_GID} ${USERNAME} || true && \
-    useradd --uid ${USER_UID} --gid ${USER_GID} -m ${USERNAME} || true && \
-    mkdir -p /workspace && chown -R ${USERNAME}:${USERNAME} /workspace
+WORKDIR /workspace
+COPY train.py /workspace/
 
-# --- Expose SSH (jeśli chcesz wchodzić do poda) ---
-EXPOSE 22
-
-# --- Default ---
 CMD ["/bin/bash"]
