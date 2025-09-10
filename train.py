@@ -6,6 +6,7 @@ from transformers import DonutProcessor, VisionEncoderDecoderModel, Seq2SeqTrain
 from PIL import Image
 import torch
 from glob import glob
+from torch.nn.utils.rnn import pad_sequence
 
 # --- KONFIG ---
 MODEL_NAME = "naver-clova-ix/donut-base-finetuned-cord-v2"
@@ -43,7 +44,6 @@ def load_jsonl(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
         for line in f:
             item = json.loads(line)
-            # znajdź wszystkie strony dla zlecenia
             base_name = item["image_path"].rsplit("-page_", 1)[0]
             pages = sorted(glob(os.path.join(DATA_DIR, f"{base_name}-page_*.png")))
             if not pages:
@@ -65,28 +65,49 @@ model = VisionEncoderDecoderModel.from_pretrained(MODEL_NAME)
 
 # --- Preprocessing ---
 def preprocess_function(example):
-    # wczytanie wszystkich stron i połączenie w listę tensorów
     images = []
     for img_path in example["image_paths"]:
         if not os.path.exists(img_path):
             raise FileNotFoundError(f"[ERROR] Nie znaleziono obrazu {img_path}")
         image = Image.open(img_path).convert("RGB")
         images.append(processor(image, return_tensors="pt").pixel_values.squeeze(0))
-    # łączymy obrazy w tensor (lista -> batch)
-    pixel_values = torch.stack(images)  # [num_pages, 3, H, W]
+    example["pixel_values_list"] = images
 
-    labels = processor.tokenizer(
-        example["output"],
+    text = example["output"]
+    if not isinstance(text, str):
+        text = json.dumps(text, ensure_ascii=False)
+
+    tokenized = processor.tokenizer(
+        text,
         add_special_tokens=False,
         padding="max_length",
         truncation=True,
-        max_length=MAX_LENGTH,
+        max_length=int(MAX_LENGTH),
         return_tensors="pt"
-    )["input_ids"].squeeze(0)
+    )
+    example["labels"] = tokenized["input_ids"].squeeze(0)
+    return example
 
+dataset = dataset.map(
+    preprocess_function,
+    batched=False,
+    remove_columns=["image_path", "input", "output", "image_paths"]
+)
+
+# --- Custom collator dla zmiennej liczby stron ---
+def collate_fn(batch):
+    max_pages = max(len(item["pixel_values_list"]) for item in batch)
+    batch_images = []
+    for item in batch:
+        pages = item["pixel_values_list"]
+        # pad strony do max_pages
+        if len(pages) < max_pages:
+            pad_tensor = torch.zeros_like(pages[0])
+            pages.extend([pad_tensor] * (max_pages - len(pages)))
+        batch_images.append(torch.stack(pages))  # [num_pages, 3, H, W]
+    pixel_values = torch.stack(batch_images)  # [B, num_pages, 3, H, W]
+    labels = torch.stack([item["labels"] for item in batch])
     return {"pixel_values": pixel_values, "labels": labels}
-
-dataset = dataset.map(preprocess_function, remove_columns=["image_path", "input", "output", "image_paths"])
 
 # --- Argumenty trenera ---
 training_args = Seq2SeqTrainingArguments(
@@ -113,10 +134,7 @@ trainer = Seq2SeqTrainer(
     train_dataset=dataset["train"],
     eval_dataset=dataset["validation"],
     tokenizer=processor.tokenizer,
-    data_collator=lambda data: {
-        "pixel_values": torch.stack([f["pixel_values"] for f in data]),
-        "labels": torch.stack([f["labels"] for f in data])
-    }
+    data_collator=collate_fn
 )
 
 # --- Trening ---
