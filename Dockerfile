@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir \
 # --- Hugging Face + reszta wymaganych paczek ---
 RUN pip install --no-cache-dir \
     transformers>=4.57.0 \
-    datasets==2.21.0 \
+    datasets>=2.14.0,<3.0.0 \
     tokenizers==0.22.0 \
     protobuf==4.24.3 \
     accelerate==0.34.2 \
