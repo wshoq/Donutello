@@ -30,3 +30,6 @@ RUN pip install --no-cache-dir \
     scikit-learn \
     nltk \
     opencv-python-headless
+
+# Kontener startuje, ale nic się nie odpala
+CMD ["sleep", "infinity"]
