@@ -81,7 +81,7 @@ def collate_fn(batch):
         if len(images) < max_pages:
             pad_tensor = torch.zeros_like(images[0])
             images.extend([pad_tensor] * (max_pages - len(images)))
-        batch_images.append(torch.stack(images))  # [num_pages, 3, H, W]
+        batch_images.append(torch.stack(images))
 
         # Tokenizacja output
         text = item["output"]
@@ -102,7 +102,7 @@ def collate_fn(batch):
         "labels": torch.stack(labels)
     }
 
-# --- Argumenty trenera ---
+# --- Argumenty trenera (minimalne, kompatybilne z 4.25) ---
 training_args = Seq2SeqTrainingArguments(
     output_dir=OUTPUT_DIR,
     per_device_train_batch_size=BATCH_SIZE,
@@ -111,10 +111,6 @@ training_args = Seq2SeqTrainingArguments(
     learning_rate=LR,
     logging_dir=f"{OUTPUT_DIR}/logs",
     logging_steps=5,
-    save_strategy="epoch",
-    evaluation_strategy="epoch",
-    gradient_checkpointing=True,
-    remove_unused_columns=False,
     save_total_limit=2,
     fp16=torch.cuda.is_available(),
     report_to="none"
