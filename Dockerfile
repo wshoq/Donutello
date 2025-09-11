@@ -20,9 +20,9 @@ RUN pip install --no-cache-dir \
     torchaudio==2.8.0+cu128 \
     --index-url https://download.pytorch.org/whl/cu128
 
-# --- Hugging Face + reszta wymaganych paczek ---
+# --- Hugging Face + reszta paczek, stabilne wersje ---
 RUN pip install --no-cache-dir \
-    transformers==4.57.0 \
+    transformers==4.25.1 \
     datasets==2.21.0 \
     tokenizers==0.22.0 \
     protobuf==4.24.3 \
