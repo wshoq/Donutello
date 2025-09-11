@@ -17,7 +17,7 @@ BATCH_SIZE = int(os.getenv("BATCH_SIZE", 1))
 EPOCHS = int(os.getenv("EPOCHS", 3))
 LR = float(os.getenv("LEARNING_RATE", 5e-5))
 MAX_LENGTH = 512
-MAX_PAGES = 2  # Maksymalnie ile stron bierzemy pod uwagę
+MAX_PAGES = 2  # maksymalnie 2 strony w jednym obrazie
 
 # --- Walidacja datasetu ---
 if not os.path.exists(TRAIN_FILE):
@@ -38,8 +38,8 @@ if not os.path.exists(VAL_FILE):
         f.writelines(val_lines)
     print(f"[INFO] Zapisano {len(train_lines)} rekordów do {TRAIN_FILE} i {len(val_lines)} do {VAL_FILE}")
 
-# --- Wczytanie JSONL: max 2 strony ---
-def load_jsonl_max_pages(file_path, max_pages=2):
+# --- Wczytanie JSONL: łączymy maksymalnie MAX_PAGES stron ---
+def load_jsonl_combine_pages(file_path):
     data = []
     with open(file_path, "r", encoding="utf-8") as f:
         for line in f:
@@ -48,15 +48,29 @@ def load_jsonl_max_pages(file_path, max_pages=2):
             pages = sorted(glob(os.path.join(DATA_DIR, f"{base_name}-page_*.png")))
             if not pages:
                 pages = [os.path.join(DATA_DIR, item["image_path"])]
-            pages = pages[:max_pages]  # max 2 strony
+            # ograniczamy liczbę stron
+            pages = pages[:MAX_PAGES]
+
+            # --- Łączenie stron pionowo ---
+            images = [Image.open(p).convert("RGB") for p in pages]
+            widths, heights = zip(*(img.size for img in images))
+            max_width = max(widths)
+            total_height = sum(heights)
+            combined_image = Image.new("RGB", (max_width, total_height))
+            y_offset = 0
+            for img in images:
+                combined_image.paste(img, (0, y_offset))
+                y_offset += img.size[1]
+
             data.append({
-                "image_paths": pages,
+                "zlc_id": base_name,
+                "image": combined_image,
                 "output": item["output"]
             })
     return data
 
-train_data = load_jsonl_max_pages(TRAIN_FILE, MAX_PAGES)
-val_data = load_jsonl_max_pages(VAL_FILE, MAX_PAGES)
+train_data = load_jsonl_combine_pages(TRAIN_FILE)
+val_data = load_jsonl_combine_pages(VAL_FILE)
 
 dataset = DatasetDict({
     "train": Dataset.from_list(train_data),
@@ -67,21 +81,14 @@ dataset = DatasetDict({
 processor = DonutProcessor.from_pretrained(MODEL_NAME)
 model = VisionEncoderDecoderModel.from_pretrained(MODEL_NAME)
 
-# --- Collate_fn: łączy wszystkie strony w jeden tensor ---
+# --- Lazy loading w collate_fn ---
 def collate_fn(batch):
     batch_images = []
     labels = []
 
     for item in batch:
-        images = []
-        for img_path in item["image_paths"]:
-            if not os.path.exists(img_path):
-                raise FileNotFoundError(f"[ERROR] Nie znaleziono obrazu {img_path}")
-            image = Image.open(img_path).convert("RGB")
-            images.append(processor(image, return_tensors="pt").pixel_values.squeeze(0))
-
-        # Stack stron w jeden tensor: [num_pages, 3, H, W]
-        pixel_values = torch.stack(images)
+        image = item["image"]
+        pixel_values = processor(image, return_tensors="pt").pixel_values.squeeze(0)
         batch_images.append(pixel_values)
 
         text = item["output"]
@@ -96,14 +103,6 @@ def collate_fn(batch):
             return_tensors="pt"
         )
         labels.append(tokenized["input_ids"].squeeze(0))
-
-    # pad batchy do tego samego num_pages jeśli jest nierówny (najczęściej batch_size=1)
-    max_pages_in_batch = max(x.shape[0] for x in batch_images)
-    for i in range(len(batch_images)):
-        if batch_images[i].shape[0] < max_pages_in_batch:
-            pad_tensor = torch.zeros_like(batch_images[i][0])
-            pad_count = max_pages_in_batch - batch_images[i].shape[0]
-            batch_images[i] = torch.cat([batch_images[i], pad_tensor.repeat(pad_count,1,1,1)], dim=0)
 
     return {
         "pixel_values": torch.stack(batch_images),
@@ -142,3 +141,6 @@ trainer = Seq2SeqTrainer(
 trainer.train()
 trainer.save_model(OUTPUT_DIR)
 print(f"Model zapisany w {OUTPUT_DIR}")
+
+# --- Postprocessing ---
+# Można grupować wyniki po zlc_id aby mieć finalny output zlecenia
