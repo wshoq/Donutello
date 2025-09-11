@@ -1,11 +1,14 @@
-torch==2.8.0+cu128
-torchvision==0.23.0+cu128
-torchaudio==2.8.0+cu128
 transformers==4.25.1
 tokenizers==0.13.3
 datasets>=2.14.0,<3.0.0
 protobuf==4.24.3
 accelerate==0.34.2
+peft
 sentencepiece
 Pillow
 tqdm
+evaluate
+jsonlines
+scikit-learn
+nltk
+opencv-python-headless
