@@ -17,6 +17,7 @@ BATCH_SIZE = int(os.getenv("BATCH_SIZE", 1))
 EPOCHS = int(os.getenv("EPOCHS", 3))
 LR = float(os.getenv("LEARNING_RATE", 5e-5))
 MAX_LENGTH = 512
+MAX_PAGES = 2  # Maksymalnie ile stron bierzemy pod uwagę
 
 # --- Walidacja datasetu ---
 if not os.path.exists(TRAIN_FILE):
@@ -37,26 +38,25 @@ if not os.path.exists(VAL_FILE):
         f.writelines(val_lines)
     print(f"[INFO] Zapisano {len(train_lines)} rekordów do {TRAIN_FILE} i {len(val_lines)} do {VAL_FILE}")
 
-# --- Wczytanie JSONL z obsługą wielu stron ---
-def load_jsonl(file_path):
+# --- Wczytanie JSONL: max 2 strony ---
+def load_jsonl_max_pages(file_path, max_pages=2):
     data = []
     with open(file_path, "r", encoding="utf-8") as f:
         for line in f:
             item = json.loads(line)
-            # Poprawione ścieżki do obrazów
-            image_rel = item["image_path"]
-            base_name = os.path.splitext(os.path.basename(image_rel))[0].rsplit("-page_", 1)[0]
-            pages = sorted(glob(os.path.join(DATA_DIR, "png", f"{base_name}-page_*.png")))
+            base_name = item["image_path"].rsplit("-page_", 1)[0]
+            pages = sorted(glob(os.path.join(DATA_DIR, f"{base_name}-page_*.png")))
             if not pages:
-                # fallback: pojedynczy obraz
-                pages = [os.path.join(DATA_DIR, image_rel)]
-            item["image_paths"] = pages
-            data.append(item)
-    print(f"[INFO] Załadowano {len(data)} rekordów z {file_path}")
+                pages = [os.path.join(DATA_DIR, item["image_path"])]
+            pages = pages[:max_pages]  # max 2 strony
+            data.append({
+                "image_paths": pages,
+                "output": item["output"]
+            })
     return data
 
-train_data = load_jsonl(TRAIN_FILE)
-val_data = load_jsonl(VAL_FILE)
+train_data = load_jsonl_max_pages(TRAIN_FILE, MAX_PAGES)
+val_data = load_jsonl_max_pages(VAL_FILE, MAX_PAGES)
 
 dataset = DatasetDict({
     "train": Dataset.from_list(train_data),
@@ -67,12 +67,10 @@ dataset = DatasetDict({
 processor = DonutProcessor.from_pretrained(MODEL_NAME)
 model = VisionEncoderDecoderModel.from_pretrained(MODEL_NAME)
 
-# --- Lazy loading w collate_fn ---
+# --- Collate_fn: łączy wszystkie strony w jeden tensor ---
 def collate_fn(batch):
     batch_images = []
     labels = []
-
-    max_pages = max(len(item["image_paths"]) for item in batch)
 
     for item in batch:
         images = []
@@ -81,13 +79,11 @@ def collate_fn(batch):
                 raise FileNotFoundError(f"[ERROR] Nie znaleziono obrazu {img_path}")
             image = Image.open(img_path).convert("RGB")
             images.append(processor(image, return_tensors="pt").pixel_values.squeeze(0))
-        # Pad strony do max_pages
-        if len(images) < max_pages:
-            pad_tensor = torch.zeros_like(images[0])
-            images.extend([pad_tensor] * (max_pages - len(images)))
-        batch_images.append(torch.stack(images))  # [num_pages, 3, H, W]
 
-        # Tokenizacja output
+        # Stack stron w jeden tensor: [num_pages, 3, H, W]
+        pixel_values = torch.stack(images)
+        batch_images.append(pixel_values)
+
         text = item["output"]
         if not isinstance(text, str):
             text = json.dumps(text, ensure_ascii=False)
@@ -100,6 +96,14 @@ def collate_fn(batch):
             return_tensors="pt"
         )
         labels.append(tokenized["input_ids"].squeeze(0))
+
+    # pad batchy do tego samego num_pages jeśli jest nierówny (najczęściej batch_size=1)
+    max_pages_in_batch = max(x.shape[0] for x in batch_images)
+    for i in range(len(batch_images)):
+        if batch_images[i].shape[0] < max_pages_in_batch:
+            pad_tensor = torch.zeros_like(batch_images[i][0])
+            pad_count = max_pages_in_batch - batch_images[i].shape[0]
+            batch_images[i] = torch.cat([batch_images[i], pad_tensor.repeat(pad_count,1,1,1)], dim=0)
 
     return {
         "pixel_values": torch.stack(batch_images),
@@ -115,11 +119,11 @@ training_args = Seq2SeqTrainingArguments(
     learning_rate=LR,
     logging_dir=f"{OUTPUT_DIR}/logs",
     logging_steps=5,
-    save_strategy="no",  # nie zapisuje co epokę
-    evaluation_strategy="no",
+    save_strategy="epoch",
+    evaluation_strategy="epoch",
     gradient_checkpointing=True,
     remove_unused_columns=False,
-    save_total_limit=1,
+    save_total_limit=2,
     fp16=torch.cuda.is_available(),
     report_to="none"
 )
