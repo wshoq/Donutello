@@ -11,7 +11,14 @@ WORKDIR /workspace
 COPY train.py /workspace/
 COPY requirements.txt /workspace/
 
-# --- Instalacja wszystkiego z requirements ---
+# --- PyTorch + CUDA 12.8 ---
+RUN pip install --no-cache-dir \
+    torch==2.8.0 \
+    torchvision==0.23.0 \
+    torchaudio==2.8.0 \
+    --index-url https://download.pytorch.org/whl/cu128
+
+# --- Reszta paczek z requirements ---
 RUN pip install --no-cache-dir -r requirements.txt
 
 # --- Domyślny CMD ---
