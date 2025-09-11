@@ -1,10 +1,6 @@
-# ----------------------------
-# Dockerfile dla Donut Training
-# ----------------------------
-
 FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
 
-# --- Podstawowe narzędzia i Python ---
+# --- Podstawowe narzędzia ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip python3-dev git wget unzip curl ca-certificates build-essential \
  && rm -rf /var/lib/apt/lists/*
@@ -21,16 +17,19 @@ RUN pip install --no-cache-dir \
     torchaudio==2.8.0+cu128 \
     --index-url https://download.pytorch.org/whl/cu128
 
-# --- Hugging Face + reszta paczek, stabilne wersje ---
+# --- Podstawowe paczki Hugging Face (kompatybilne wersje) ---
 RUN pip install --no-cache-dir \
     transformers==4.25.1 \
-    datasets==2.21.0 \
     tokenizers==0.22.0 \
+    datasets==2.21.0 \
     protobuf==4.24.3 \
     accelerate==0.34.2 \
-    peft \
     sentencepiece \
-    Pillow \
+    Pillow
+
+# --- Pozostałe paczki (mniejsze ryzyko konfliktów) ---
+RUN pip install --no-cache-dir \
+    peft \
     tqdm \
     evaluate \
     jsonlines \
@@ -38,5 +37,5 @@ RUN pip install --no-cache-dir \
     nltk \
     opencv-python-headless
 
-# --- Domyślny CMD, kontener nie odpala treningu od razu ---
+# --- Domyślny CMD ---
 CMD ["sleep", "infinity"]
