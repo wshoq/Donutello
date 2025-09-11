@@ -63,7 +63,7 @@ dataset = DatasetDict({
 processor = DonutProcessor.from_pretrained(MODEL_NAME)
 model = VisionEncoderDecoderModel.from_pretrained(MODEL_NAME)
 
-# --- Lazy loading w collate_fn dla wielu stron ---
+# --- Lazy loading w collate_fn ---
 def collate_fn(batch):
     batch_images = []
     labels = []
