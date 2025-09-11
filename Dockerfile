@@ -1,6 +1,7 @@
 # ----------------------------
 # Dockerfile dla Donut Training
 # ----------------------------
+
 FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
 
 # --- Podstawowe narzędzia i Python ---
