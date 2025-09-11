@@ -43,12 +43,16 @@ def load_jsonl(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
         for line in f:
             item = json.loads(line)
-            base_name = item["image_path"].rsplit("-page_", 1)[0]
-            pages = sorted(glob(os.path.join(DATA_DIR, f"{base_name}-page_*.png")))
+            # Poprawione ścieżki do obrazów
+            image_rel = item["image_path"]
+            base_name = os.path.splitext(os.path.basename(image_rel))[0].rsplit("-page_", 1)[0]
+            pages = sorted(glob(os.path.join(DATA_DIR, "png", f"{base_name}-page_*.png")))
             if not pages:
-                pages = [os.path.join(DATA_DIR, item["image_path"])]
+                # fallback: pojedynczy obraz
+                pages = [os.path.join(DATA_DIR, image_rel)]
             item["image_paths"] = pages
             data.append(item)
+    print(f"[INFO] Załadowano {len(data)} rekordów z {file_path}")
     return data
 
 train_data = load_jsonl(TRAIN_FILE)
@@ -81,7 +85,7 @@ def collate_fn(batch):
         if len(images) < max_pages:
             pad_tensor = torch.zeros_like(images[0])
             images.extend([pad_tensor] * (max_pages - len(images)))
-        batch_images.append(torch.stack(images))
+        batch_images.append(torch.stack(images))  # [num_pages, 3, H, W]
 
         # Tokenizacja output
         text = item["output"]
@@ -102,7 +106,7 @@ def collate_fn(batch):
         "labels": torch.stack(labels)
     }
 
-# --- Argumenty trenera (minimalne, kompatybilne z 4.25) ---
+# --- Argumenty trenera ---
 training_args = Seq2SeqTrainingArguments(
     output_dir=OUTPUT_DIR,
     per_device_train_batch_size=BATCH_SIZE,
@@ -111,7 +115,11 @@ training_args = Seq2SeqTrainingArguments(
     learning_rate=LR,
     logging_dir=f"{OUTPUT_DIR}/logs",
     logging_steps=5,
-    save_total_limit=2,
+    save_strategy="no",  # nie zapisuje co epokę
+    evaluation_strategy="no",
+    gradient_checkpointing=True,
+    remove_unused_columns=False,
+    save_total_limit=1,
     fp16=torch.cuda.is_available(),
     report_to="none"
 )
